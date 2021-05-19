@@ -59,7 +59,7 @@ up examples to ensure that we have adequate functionality.
 
 include::plutus-contract/LAYER1.adoc[]
 
-include::plutus-use-cases/LAYER1.adoc[]
+include::plutus-use-cases/LAYER1    .adoc[]
 
 
  
