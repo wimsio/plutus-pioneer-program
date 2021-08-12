@@ -17,11 +17,11 @@ import           Data.Aeson             (ToJSON, FromJSON)
 import           Data.Text              (Text)
 import           Data.Void              (Void)
 import           GHC.Generics           (Generic)
-import           Plutus.Contract        as Contract hiding (when)
+import           Plutus.Contract        as Contract
 import           Plutus.Trace.Emulator  as Emulator
 import qualified PlutusTx
 import           PlutusTx.Prelude       hiding (Semigroup(..), unless)
-import           Ledger                 hiding (singleton)
+import           Ledger                 hiding (mint, singleton)
 import           Ledger.Constraints     as Constraints
 import qualified Ledger.Typed.Scripts   as Scripts
 import           Ledger.Value           as Value
@@ -33,15 +33,16 @@ import           Playground.Contract    (printJson, printSchemas, ensureKnownCur
 >>>>>>> b50b196d57dc35559b7526fe17b49dd2ba4790bc
 import           Playground.TH          (mkKnownCurrencies, mkSchemaDefinitions)
 import           Playground.Types       (KnownCurrency (..))
+import           Prelude                (IO, Show (..), String)
 import           Text.Printf            (printf)
 import           Wallet.Emulator.Wallet
 
 {-# INLINABLE mkPolicy #-}
-mkPolicy :: ScriptContext -> Bool
-mkPolicy _ = True
+mkPolicy :: () -> ScriptContext -> Bool
+mkPolicy () _ = True
 
-policy :: Scripts.MonetaryPolicy
-policy = mkMonetaryPolicyScript $$(PlutusTx.compile [|| Scripts.wrapMonetaryPolicy mkPolicy ||])
+policy :: Scripts.MintingPolicy
+policy = mkMintingPolicyScript $$(PlutusTx.compile [|| Scripts.wrapMintingPolicy mkPolicy ||])
 
 curSymbol :: CurrencySymbol
 curSymbol = scriptCurrencySymbol policy
@@ -51,15 +52,13 @@ data MintParams = MintParams
     , mpAmount    :: !Integer
     } deriving (Generic, ToJSON, FromJSON, ToSchema)
 
-type FreeSchema =
-    BlockchainActions
-        .\/ Endpoint "mint" MintParams
+type FreeSchema = Endpoint "mint" MintParams
 
 mint :: MintParams -> Contract w FreeSchema Text ()
 mint mp = do
     let val     = Value.singleton curSymbol (mpTokenName mp) (mpAmount mp)
-        lookups = Constraints.monetaryPolicy policy
-        tx      = Constraints.mustForgeValue val
+        lookups = Constraints.mintingPolicy policy
+        tx      = Constraints.mustMintValue val
     ledgerTx <- submitTxConstraintsWith @Void lookups tx
     void $ awaitTxConfirmed $ txId ledgerTx
     Contract.logInfo @String $ printf "forged %s" (show val)

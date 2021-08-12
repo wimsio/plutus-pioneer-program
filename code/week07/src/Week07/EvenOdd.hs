@@ -25,24 +25,24 @@ import           Data.Aeson           (FromJSON, ToJSON)
 import qualified Data.Map             as Map
 import           Data.Text            (Text)
 import           GHC.Generics         (Generic)
-import           Plutus.Contract      as Contract hiding (when)
-import qualified PlutusTx
-import           PlutusTx.Prelude     hiding (Semigroup(..), unless)
 import           Ledger               hiding (singleton)
 import           Ledger.Constraints   as Constraints
 import qualified Ledger.Typed.Scripts as Scripts
 import           Ledger.Ada           as Ada
 import           Ledger.Value
 import           Playground.Contract  (ToSchema)
-import           Prelude              (Semigroup (..))
+import           Plutus.Contract      as Contract
+import qualified PlutusTx
+import           PlutusTx.Prelude     hiding (Semigroup(..), unless)
+import           Prelude              (Semigroup (..), Show (..), String)
 import qualified Prelude
 
 data Game = Game
     { gFirst          :: !PubKeyHash
     , gSecond         :: !PubKeyHash
     , gStake          :: !Integer
-    , gPlayDeadline   :: !Slot
-    , gRevealDeadline :: !Slot
+    , gPlayDeadline   :: !POSIXTime
+    , gRevealDeadline :: !POSIXTime
     , gToken          :: !AssetClass
     } deriving (Show, Generic, FromJSON, ToJSON, Prelude.Eq, Prelude.Ord)
 
@@ -82,7 +82,7 @@ gameDatum :: TxOut -> (DatumHash -> Maybe Datum) -> Maybe GameDatum
 gameDatum o f = do
     dh      <- txOutDatum o
     Datum d <- f dh
-    PlutusTx.fromData d
+    PlutusTx.fromBuiltinData d
 
 {-# INLINABLE mkGameValidator #-}
 mkGameValidator :: Game -> ByteString -> ByteString -> GameDatum -> GameRedeemer -> ScriptContext -> Bool
@@ -148,7 +148,7 @@ mkGameValidator game bsZero' bsOne' dat red ctx =
     nftToFirst = assetClassValueOf (valuePaidTo info $ gFirst game) (gToken game) == 1
 
 data Gaming
-instance Scripts.ScriptType Gaming where
+instance Scripts.ValidatorTypes Gaming where
     type instance DatumType Gaming = GameDatum
     type instance RedeemerType Gaming = GameRedeemer
 
@@ -156,8 +156,8 @@ bsZero, bsOne :: ByteString
 bsZero = "0"
 bsOne  = "1"
 
-gameInst :: Game -> Scripts.ScriptInstance Gaming
-gameInst game = Scripts.validator @Gaming
+typedGameValidator :: Game -> Scripts.TypedValidator Gaming
+typedGameValidator game = Scripts.mkTypedValidator @Gaming
     ($$(PlutusTx.compile [|| mkGameValidator ||])
         `PlutusTx.applyCode` PlutusTx.liftCode game
         `PlutusTx.applyCode` PlutusTx.liftCode bsZero
@@ -167,12 +167,12 @@ gameInst game = Scripts.validator @Gaming
     wrap = Scripts.wrapValidator @GameDatum @GameRedeemer
 
 gameValidator :: Game -> Validator
-gameValidator = Scripts.validatorScript . gameInst
+gameValidator = Scripts.validatorScript . typedGameValidator
 
 gameAddress :: Game -> Ledger.Address
 gameAddress = scriptAddress . gameValidator
 
-findGameOutput :: HasBlockchainActions s => Game -> Contract w s Text (Maybe (TxOutRef, TxOutTx, GameDatum))
+findGameOutput :: Game -> Contract w s Text (Maybe (TxOutRef, TxOutTx, GameDatum))
 findGameOutput game = do
     utxos <- utxoAt $ gameAddress game
     return $ do
@@ -183,18 +183,26 @@ findGameOutput game = do
     f :: (TxOutRef, TxOutTx) -> Bool
     f (_, o) = assetClassValueOf (txOutValue $ txOutTxOut o) (gToken game) == 1
 
+waitUntilTimeHasPassed :: AsContractError e => POSIXTime -> Contract w s e ()
+waitUntilTimeHasPassed t = do
+    s1 <- currentSlot
+    logInfo @String $ "current slot: " ++ show s1 ++ ", waiting until " ++ show t
+    void $ awaitTime t >> waitNSlots 1
+    s2 <- currentSlot
+    logInfo @String $ "waited until: " ++ show s2
+
 data FirstParams = FirstParams
     { fpSecond         :: !PubKeyHash
     , fpStake          :: !Integer
-    , fpPlayDeadline   :: !Slot
-    , fpRevealDeadline :: !Slot
+    , fpPlayDeadline   :: !POSIXTime
+    , fpRevealDeadline :: !POSIXTime
     , fpNonce          :: !ByteString
     , fpCurrency       :: !CurrencySymbol
     , fpTokenName      :: !TokenName
     , fpChoice         :: !GameChoice
     } deriving (Show, Generic, FromJSON, ToJSON, ToSchema)
 
-firstGame :: forall w s. HasBlockchainActions s => FirstParams -> Contract w s Text ()
+firstGame :: forall w s. FirstParams -> Contract w s Text ()
 firstGame fp = do
     pkh <- pubKeyHash <$> Contract.ownPubKey
     let game = Game
@@ -209,13 +217,14 @@ firstGame fp = do
         c    = fpChoice fp
         bs   = sha2_256 $ fpNonce fp `concatenate` if c == Zero then bsZero else bsOne
         tx   = Constraints.mustPayToTheScript (GameDatum bs Nothing) v
-    ledgerTx <- submitTxConstraints (gameInst game) tx
+    ledgerTx <- submitTxConstraints (typedGameValidator game) tx
     void $ awaitTxConfirmed $ txId ledgerTx
     logInfo @String $ "made first move: " ++ show (fpChoice fp)
 
-    void $ awaitSlot $ 1 + fpPlayDeadline fp
+    waitUntilTimeHasPassed $ fpPlayDeadline fp
 
-    m <- findGameOutput game
+    m   <- findGameOutput game
+    now <- currentTime
     case m of
         Nothing             -> throwError "game output not found"
         Just (oref, o, dat) -> case dat of
@@ -223,17 +232,19 @@ firstGame fp = do
                 logInfo @String "second player did not play"
                 let lookups = Constraints.unspentOutputs (Map.singleton oref o) <>
                               Constraints.otherScript (gameValidator game)
-                    tx'     = Constraints.mustSpendScriptOutput oref (Redeemer $ PlutusTx.toData ClaimFirst)
+                    tx'     = Constraints.mustSpendScriptOutput oref (Redeemer $ PlutusTx.toBuiltinData ClaimFirst) <>
+                              Constraints.mustValidateIn (from now)
                 ledgerTx' <- submitTxConstraintsWith @Gaming lookups tx'
                 void $ awaitTxConfirmed $ txId ledgerTx'
                 logInfo @String "reclaimed stake"
 
             GameDatum _ (Just c') | c' == c -> do
+
                 logInfo @String "second player played and lost"
-                let lookups = Constraints.unspentOutputs (Map.singleton oref o)                                         <>
+                let lookups = Constraints.unspentOutputs (Map.singleton oref o) <>
                               Constraints.otherScript (gameValidator game)
-                    tx'     = Constraints.mustSpendScriptOutput oref (Redeemer $ PlutusTx.toData $ Reveal $ fpNonce fp) <>
-                              Constraints.mustValidateIn (to $ fpRevealDeadline fp)
+                    tx'     = Constraints.mustSpendScriptOutput oref (Redeemer $ PlutusTx.toBuiltinData $ Reveal $ fpNonce fp) <>
+                              Constraints.mustValidateIn (to $ now + 1000)
                 ledgerTx' <- submitTxConstraintsWith @Gaming lookups tx'
                 void $ awaitTxConfirmed $ txId ledgerTx'
                 logInfo @String "victory"
@@ -243,14 +254,14 @@ firstGame fp = do
 data SecondParams = SecondParams
     { spFirst          :: !PubKeyHash
     , spStake          :: !Integer
-    , spPlayDeadline   :: !Slot
-    , spRevealDeadline :: !Slot
+    , spPlayDeadline   :: !POSIXTime
+    , spRevealDeadline :: !POSIXTime
     , spCurrency       :: !CurrencySymbol
     , spTokenName      :: !TokenName
     , spChoice         :: !GameChoice
     } deriving (Show, Generic, FromJSON, ToJSON, ToSchema)
 
-secondGame :: forall w s. HasBlockchainActions s => SecondParams -> Contract w s Text ()
+secondGame :: forall w s. SecondParams -> Contract w s Text ()
 secondGame sp = do
     pkh <- pubKeyHash <$> Contract.ownPubKey
     let game = Game
@@ -265,31 +276,33 @@ secondGame sp = do
     case m of
         Just (oref, o, GameDatum bs Nothing) -> do
             logInfo @String "running game found"
+            now <- currentTime
             let token   = assetClassValue (gToken game) 1
             let v       = let x = lovelaceValueOf (spStake sp) in x <> x <> token
                 c       = spChoice sp
-                lookups = Constraints.unspentOutputs (Map.singleton oref o)                            <>
-                          Constraints.otherScript (gameValidator game)                                 <>
-                          Constraints.scriptInstanceLookups (gameInst game)
-                tx      = Constraints.mustSpendScriptOutput oref (Redeemer $ PlutusTx.toData $ Play c) <>
-                          Constraints.mustPayToTheScript (GameDatum bs $ Just c) v                     <>
-                          Constraints.mustValidateIn (to $ spPlayDeadline sp)
+                lookups = Constraints.unspentOutputs (Map.singleton oref o)                                   <>
+                          Constraints.otherScript (gameValidator game)                                        <>
+                          Constraints.typedValidatorLookups (typedGameValidator game)
+                tx      = Constraints.mustSpendScriptOutput oref (Redeemer $ PlutusTx.toBuiltinData $ Play c) <>
+                          Constraints.mustPayToTheScript (GameDatum bs $ Just c) v                            <>
+                          Constraints.mustValidateIn (to now)
             ledgerTx <- submitTxConstraintsWith @Gaming lookups tx
             let tid = txId ledgerTx
             void $ awaitTxConfirmed tid
             logInfo @String $ "made second move: " ++ show (spChoice sp)
 
-            void $ awaitSlot $ 1 + spRevealDeadline sp
+            waitUntilTimeHasPassed $ spRevealDeadline sp
 
-            m' <- findGameOutput game
+            m'   <- findGameOutput game
+            now' <- currentTime
             case m' of
                 Nothing             -> logInfo @String "first player won"
                 Just (oref', o', _) -> do
                     logInfo @String "first player didn't reveal"
-                    let lookups' = Constraints.unspentOutputs (Map.singleton oref' o')                              <>
+                    let lookups' = Constraints.unspentOutputs (Map.singleton oref' o')                                     <>
                                    Constraints.otherScript (gameValidator game)
-                        tx'      = Constraints.mustSpendScriptOutput oref' (Redeemer $ PlutusTx.toData ClaimSecond) <>
-                                   Constraints.mustValidateIn (from $ 1 + spRevealDeadline sp)                      <>
+                        tx'      = Constraints.mustSpendScriptOutput oref' (Redeemer $ PlutusTx.toBuiltinData ClaimSecond) <>
+                                   Constraints.mustValidateIn (from now')                                                  <>
                                    Constraints.mustPayToPubKey (spFirst sp) token
                     ledgerTx' <- submitTxConstraintsWith @Gaming lookups' tx'
                     void $ awaitTxConfirmed $ txId ledgerTx'
@@ -297,7 +310,7 @@ secondGame sp = do
 
         _ -> logInfo @String "no running game found"
 
-type GameSchema = BlockchainActions .\/ Endpoint "first" FirstParams .\/ Endpoint "second" SecondParams
+type GameSchema = Endpoint "first" FirstParams .\/ Endpoint "second" SecondParams
 
 endpoints :: Contract () GameSchema Text ()
 endpoints = (first `select` second) >> endpoints

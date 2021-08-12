@@ -10,6 +10,8 @@
 {-# LANGUAGE TypeFamilies        #-}
 {-# LANGUAGE TypeOperators       #-}
 
+{-# OPTIONS_GHC -fno-warn-unused-imports #-}
+
 module Week03.Solution1 where
 
 import           Control.Monad        hiding (fmap)
@@ -18,7 +20,7 @@ import           Data.Map             as Map
 import           Data.Text            (Text)
 import           Data.Void            (Void)
 import           GHC.Generics         (Generic)
-import           Plutus.Contract      hiding (when)
+import           Plutus.Contract
 import qualified PlutusTx
 import           PlutusTx.Prelude     hiding (unless)
 import           Ledger               hiding (singleton)
@@ -28,13 +30,14 @@ import           Ledger.Ada           as Ada
 import           Playground.Contract  (printJson, printSchemas, ensureKnownCurrencies, stage, ToSchema)
 import           Playground.TH        (mkKnownCurrencies, mkSchemaDefinitions)
 import           Playground.Types     (KnownCurrency (..))
+import           Prelude              (IO, Show (..), String)
 import qualified Prelude              as P
 import           Text.Printf          (printf)
 
 data VestingDatum = VestingDatum
     { beneficiary1 :: PubKeyHash
     , beneficiary2 :: PubKeyHash
-    , deadline     :: Slot
+    , deadline     :: POSIXTime
     } deriving Show
 
 PlutusTx.unstableMakeIsData ''VestingDatum
@@ -52,39 +55,38 @@ mkValidator dat () ctx
     sigs :: [PubKeyHash]
     sigs = txInfoSignatories info
 
-    range :: SlotRange
+    range :: POSIXTimeRange
     range = txInfoValidRange info
 
 data Vesting
-instance Scripts.ScriptType Vesting where
+instance Scripts.ValidatorTypes Vesting where
     type instance DatumType Vesting = VestingDatum
     type instance RedeemerType Vesting = ()
 
-inst :: Scripts.ScriptInstance Vesting
-inst = Scripts.validator @Vesting
+typedValidator :: Scripts.TypedValidator Vesting
+typedValidator = Scripts.mkTypedValidator @Vesting
     $$(PlutusTx.compile [|| mkValidator ||])
     $$(PlutusTx.compile [|| wrap ||])
   where
     wrap = Scripts.wrapValidator @VestingDatum @()
 
 validator :: Validator
-validator = Scripts.validatorScript inst
+validator = Scripts.validatorScript typedValidator
 
 scrAddress :: Ledger.Address
 scrAddress = scriptAddress validator
 
 data GiveParams = GiveParams
     { gpBeneficiary :: !PubKeyHash
-    , gpDeadline    :: !Slot
+    , gpDeadline    :: !POSIXTime
     , gpAmount      :: !Integer
     } deriving (Generic, ToJSON, FromJSON, ToSchema)
 
 type VestingSchema =
-    BlockchainActions
-        .\/ Endpoint "give" GiveParams
+            Endpoint "give" GiveParams
         .\/ Endpoint "grab" ()
 
-give :: (HasBlockchainActions s, AsContractError e) => GiveParams -> Contract w s e ()
+give :: AsContractError e => GiveParams -> Contract w s e ()
 give gp = do
     pkh <- pubKeyHash <$> ownPubKey
     let dat = VestingDatum
@@ -93,16 +95,16 @@ give gp = do
                 , deadline     = gpDeadline gp
                 }
         tx  = mustPayToTheScript dat $ Ada.lovelaceValueOf $ gpAmount gp
-    ledgerTx <- submitTxConstraints inst tx
+    ledgerTx <- submitTxConstraints typedValidator tx
     void $ awaitTxConfirmed $ txId ledgerTx
     logInfo @String $ printf "made a gift of %d lovelace to %s with deadline %s"
         (gpAmount gp)
         (show $ gpBeneficiary gp)
         (show $ gpDeadline gp)
 
-grab :: forall w s e. (HasBlockchainActions s, AsContractError e) => Contract w s e ()
+grab :: forall w s e. AsContractError e => Contract w s e ()
 grab = do
-    now    <- currentSlot
+    now    <- currentTime
     pkh    <- pubKeyHash <$> ownPubKey
     utxos  <- utxoAt scrAddress
     let utxos1 = Map.filter (isSuitable $ \dat -> beneficiary1 dat == pkh && now <= deadline dat) utxos

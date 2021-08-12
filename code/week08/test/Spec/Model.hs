@@ -22,6 +22,7 @@ module Spec.Model
 
 import           Control.Lens                       hiding (elements)
 import           Control.Monad                      (void, when)
+import           Data.Default                       (Default (..))
 import           Data.Map                           (Map)
 import qualified Data.Map                           as Map
 import           Data.Maybe                         (isJust, isNothing)
@@ -38,7 +39,7 @@ import           Test.QuickCheck
 import           Test.Tasty
 import           Test.Tasty.QuickCheck
 
-import           Week08.TokenSale                   (TokenSale (..), TSStartSchema', TSUseSchema, startEndpoint', useEndpoints, nftName)
+import           Week08.TokenSale                   (TokenSale (..), TSStartSchema, TSUseSchema, startEndpoint, useEndpoints)
 
 data TSState = TSState
     { _tssPrice    :: !Integer
@@ -67,8 +68,8 @@ instance ContractModel TSModel where
         deriving (Show, Eq)
 
     data ContractInstanceKey TSModel w s e where
-        StartKey :: Wallet           -> ContractInstanceKey TSModel (Last TokenSale) TSStartSchema' Text
-        UseKey   :: Wallet -> Wallet -> ContractInstanceKey TSModel ()               TSUseSchema    Text
+        StartKey :: Wallet           -> ContractInstanceKey TSModel (Last TokenSale) TSStartSchema Text
+        UseKey   :: Wallet -> Wallet -> ContractInstanceKey TSModel ()               TSUseSchema   Text
 
     instanceTag key _ = fromString $ "instance tag for: " ++ show key
 
@@ -82,7 +83,6 @@ instance ContractModel TSModel where
     initialState = TSModel Map.empty
 
     nextState (Start w) = do
-        withdraw w $ nfts Map.! w
         (tsModel . at w) $= Just (TSState 0 0 0)
         wait 1
 
@@ -129,11 +129,11 @@ instance ContractModel TSModel where
         wait 1
 
     perform h _ cmd = case cmd of
-        (Start w)          -> callEndpoint @"start"      (h $ StartKey w) (nftCurrencies Map.! w, tokenCurrencies Map.! w, tokenNames Map.! w) >> delay 1
-        (SetPrice v w p)   -> callEndpoint @"set price"  (h $ UseKey v w) p                                                                    >> delay 1
-        (AddTokens v w n)  -> callEndpoint @"add tokens" (h $ UseKey v w) n                                                                    >> delay 1
-        (BuyTokens v w n)  -> callEndpoint @"buy tokens" (h $ UseKey v w) n                                                                    >> delay 1
-        (Withdraw v w n l) -> callEndpoint @"withdraw"   (h $ UseKey v w) (n, l)                                                               >> delay 1
+        (Start w)          -> callEndpoint @"start"      (h $ StartKey w) (tokenCurrencies Map.! w, tokenNames Map.! w, False) >> delay 1
+        (SetPrice v w p)   -> callEndpoint @"set price"  (h $ UseKey v w) p                                                    >> delay 1
+        (AddTokens v w n)  -> callEndpoint @"add tokens" (h $ UseKey v w) n                                                    >> delay 1
+        (BuyTokens v w n)  -> callEndpoint @"buy tokens" (h $ UseKey v w) n                                                    >> delay 1
+        (Withdraw v w n l) -> callEndpoint @"withdraw"   (h $ UseKey v w) (n, l)                                               >> delay 1
 
     precondition s (Start w)          = isNothing $ getTSState' s w
     precondition s (SetPrice v _ _)   = isJust    $ getTSState' s v
@@ -162,9 +162,8 @@ w2 = Wallet 2
 wallets :: [Wallet]
 wallets = [w1, w2]
 
-tokenCurrencies, nftCurrencies :: Map Wallet CurrencySymbol
+tokenCurrencies :: Map Wallet CurrencySymbol
 tokenCurrencies = Map.fromList $ zip wallets ["aa", "bb"]
-nftCurrencies   = Map.fromList $ zip wallets ["01", "02"]
 
 tokenNames :: Map Wallet TokenName
 tokenNames = Map.fromList $ zip wallets ["A", "B"]
@@ -172,17 +171,11 @@ tokenNames = Map.fromList $ zip wallets ["A", "B"]
 tokens :: Map Wallet AssetClass
 tokens = Map.fromList [(w, AssetClass (tokenCurrencies Map.! w, tokenNames Map.! w)) | w <- wallets]
 
-nftAssets :: Map Wallet AssetClass
-nftAssets = Map.fromList [(w, AssetClass (nftCurrencies Map.! w, nftName)) | w <- wallets]
-
-nfts :: Map Wallet Value
-nfts = Map.fromList [(w, assetClassValue (nftAssets Map.! w) 1) | w <- wallets]
-
 tss :: Map Wallet TokenSale
 tss = Map.fromList
-    [ (w, TokenSale { tsSeller =  pubKeyHash $ walletPubKey w
-                    , tsToken  =  tokens Map.! w
-                    , tsNFT    =  nftAssets Map.! w
+    [ (w, TokenSale { tsSeller = pubKeyHash $ walletPubKey w
+                    , tsToken  = tokens Map.! w
+                    , tsTT     = Nothing
                     })
     | w <- wallets
     ]
@@ -192,7 +185,7 @@ delay = void . waitNSlots . fromIntegral
 
 instanceSpec :: [ContractInstanceSpec TSModel]
 instanceSpec =
-    [ContractInstanceSpec (StartKey w) w startEndpoint' | w <- wallets] ++
+    [ContractInstanceSpec (StartKey w) w startEndpoint | w <- wallets] ++
     [ContractInstanceSpec (UseKey v w) w $ useEndpoints $ tss Map.! v | v <- wallets, w <- wallets]
 
 genWallet :: Gen Wallet
@@ -206,14 +199,13 @@ tokenAmt = 1_000
 
 prop_TS :: Actions TSModel -> Property
 prop_TS = withMaxSuccess 100 . propRunActionsWithOptions
-    (defaultCheckOptions & emulatorConfig .~ EmulatorConfig (Left d))
+    (defaultCheckOptions & emulatorConfig .~ EmulatorConfig (Left d) def def)
     instanceSpec
     (const $ pure True)
   where
     d :: InitialDistribution
     d = Map.fromList $ [ ( w
-                         , lovelaceValueOf 1000_000_000 <>
-                           (nfts Map.! w)               <>
+                         , lovelaceValueOf 1_000_000_000 <>
                            mconcat [assetClassValue t tokenAmt | t <- Map.elems tokens])
                        | w <- wallets
                        ]

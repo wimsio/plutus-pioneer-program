@@ -7,15 +7,15 @@
 
 module Week04.Solution where
 
-import Data.Aeson                 (FromJSON, ToJSON)
-import Data.Functor               (void)
-import Data.Text                  (Text, unpack)
-import GHC.Generics               (Generic)
+import Data.Aeson             (FromJSON, ToJSON)
+import Data.Functor           (void)
+import Data.Text              (Text, unpack)
+import GHC.Generics           (Generic)
 import Ledger
-import Ledger.Ada                 as Ada
-import Ledger.Constraints         as Constraints
-import Plutus.Contract            as Contract
-import Plutus.Trace.Emulator      as Emulator
+import Ledger.Ada             as Ada
+import Ledger.Constraints     as Constraints
+import Plutus.Contract        as Contract
+import Plutus.Trace.Emulator  as Emulator
 import Wallet.Emulator.Wallet
 
 data PayParams = PayParams
@@ -23,7 +23,7 @@ data PayParams = PayParams
     , ppLovelace  :: Integer
     } deriving (Show, Generic, FromJSON, ToJSON)
 
-type PaySchema = BlockchainActions .\/ Endpoint "pay" PayParams
+type PaySchema = Endpoint "pay" PayParams
 
 payContract :: Contract () PaySchema Text ()
 payContract = do
@@ -35,13 +35,14 @@ payContract = do
 payTrace :: Integer -> Integer -> EmulatorTrace ()
 payTrace x y = do
     h <- activateContractWallet (Wallet 1) payContract
+    let pkh = pubKeyHash $ walletPubKey $ Wallet 2
     callEndpoint @"pay" h $ PayParams
-        { ppRecipient = pubKeyHash $ walletPubKey $ Wallet 2
+        { ppRecipient = pkh
         , ppLovelace  = x
         }
     void $ Emulator.waitNSlots 1
     callEndpoint @"pay" h $ PayParams
-        { ppRecipient = pubKeyHash $ walletPubKey $ Wallet 2
+        { ppRecipient = pkh
         , ppLovelace  = y
         }
     void $ Emulator.waitNSlots 1

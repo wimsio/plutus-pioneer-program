@@ -22,7 +22,7 @@ import qualified Data.Map             as Map
 import           Data.Maybe           (mapMaybe)
 import           Data.Monoid          (Last (..))
 import           Data.Text            (Text)
-import           Plutus.Contract      as Contract hiding (when)
+import           Plutus.Contract      as Contract
 import qualified PlutusTx
 import           PlutusTx.Prelude     hiding (Semigroup(..), (<$>), unless, mapMaybe, find)
 import           Ledger               hiding (singleton)
@@ -30,7 +30,7 @@ import           Ledger.Constraints   as Constraints
 import qualified Ledger.Typed.Scripts as Scripts
 import           Ledger.Ada           as Ada hiding (divide)
 import           Ledger.Value         as Value
-import           Prelude              (Semigroup (..), (<$>))
+import           Prelude              (Semigroup (..), Show (..), String, (<$>))
 
 import           Week06.Oracle.Core
 import           Week06.Oracle.Funds
@@ -96,12 +96,12 @@ mkSwapValidator oracle addr pkh () ctx =
         pricePaid >= minPrice
 
 data Swapping
-instance Scripts.ScriptType Swapping where
+instance Scripts.ValidatorTypes Swapping where
     type instance DatumType Swapping = PubKeyHash
     type instance RedeemerType Swapping = ()
 
-swapInst :: Oracle -> Scripts.ScriptInstance Swapping
-swapInst oracle = Scripts.validator @Swapping
+typedSwapValidator :: Oracle -> Scripts.TypedValidator Swapping
+typedSwapValidator oracle = Scripts.mkTypedValidator @Swapping
     ($$(PlutusTx.compile [|| mkSwapValidator ||])
         `PlutusTx.applyCode` PlutusTx.liftCode oracle
         `PlutusTx.applyCode` PlutusTx.liftCode (oracleAddress oracle))
@@ -110,20 +110,20 @@ swapInst oracle = Scripts.validator @Swapping
     wrap = Scripts.wrapValidator @PubKeyHash @()
 
 swapValidator :: Oracle -> Validator
-swapValidator = Scripts.validatorScript . swapInst
+swapValidator = Scripts.validatorScript . typedSwapValidator
 
 swapAddress :: Oracle -> Ledger.Address
 swapAddress = scriptAddress . swapValidator
 
-offerSwap :: forall w s. HasBlockchainActions s => Oracle -> Integer -> Contract w s Text ()
+offerSwap :: forall w s. Oracle -> Integer -> Contract w s Text ()
 offerSwap oracle amt = do
     pkh <- pubKeyHash <$> Contract.ownPubKey
     let tx = Constraints.mustPayToTheScript pkh $ Ada.lovelaceValueOf amt
-    ledgerTx <- submitTxConstraints (swapInst oracle) tx
+    ledgerTx <- submitTxConstraints (typedSwapValidator oracle) tx
     awaitTxConfirmed $ txId ledgerTx
     logInfo @String $ "offered " ++ show amt ++ " lovelace for swap"
 
-findSwaps :: HasBlockchainActions s => Oracle -> (PubKeyHash -> Bool) -> Contract w s Text [(TxOutRef, TxOutTx, PubKeyHash)]
+findSwaps :: Oracle -> (PubKeyHash -> Bool) -> Contract w s Text [(TxOutRef, TxOutTx, PubKeyHash)]
 findSwaps oracle p = do
     utxos <- utxoAt $ swapAddress oracle
     return $ mapMaybe g $ Map.toList utxos
@@ -132,7 +132,7 @@ findSwaps oracle p = do
     f o = do
         dh        <- txOutDatumHash $ txOutTxOut o
         (Datum d) <- Map.lookup dh $ txData $ txOutTxTx o
-        PlutusTx.fromData d
+        PlutusTx.fromBuiltinData d
 
     g :: (TxOutRef, TxOutTx) -> Maybe (TxOutRef, TxOutTx, PubKeyHash)
     g (oref, o) = do
@@ -140,21 +140,21 @@ findSwaps oracle p = do
         guard $ p pkh
         return (oref, o, pkh)
 
-retrieveSwaps :: HasBlockchainActions s => Oracle -> Contract w s Text ()
+retrieveSwaps :: Oracle -> Contract w s Text ()
 retrieveSwaps oracle = do
     pkh <- pubKeyHash <$> ownPubKey
-    xs <- findSwaps oracle (== pkh)
+    xs  <- findSwaps oracle (== pkh)
     case xs of
         [] -> logInfo @String "no swaps found"
         _  -> do
             let lookups = Constraints.unspentOutputs (Map.fromList [(oref, o) | (oref, o, _) <- xs]) <>
                           Constraints.otherScript (swapValidator oracle)
-                tx      = mconcat [Constraints.mustSpendScriptOutput oref $ Redeemer $ PlutusTx.toData () | (oref, _, _) <- xs]
+                tx      = mconcat [Constraints.mustSpendScriptOutput oref $ Redeemer $ PlutusTx.toBuiltinData () | (oref, _, _) <- xs]
             ledgerTx <- submitTxConstraintsWith @Swapping lookups tx
             awaitTxConfirmed $ txId ledgerTx
             logInfo @String $ "retrieved " ++ show (length xs) ++ " swap(s)"
 
-useSwap :: forall w s. HasBlockchainActions s => Oracle -> Contract w s Text ()
+useSwap :: forall w s. Oracle -> Contract w s Text ()
 useSwap oracle = do
     funds <- ownFunds
     let amt = assetClassValueOf funds $ oAsset oracle
@@ -175,12 +175,12 @@ useSwap oracle = do
                         lookups = Constraints.otherScript (swapValidator oracle)                     <>
                                   Constraints.otherScript (oracleValidator oracle)                   <>
                                   Constraints.unspentOutputs (Map.fromList [(oref, o), (oref', o')])
-                        tx      = Constraints.mustSpendScriptOutput oref  (Redeemer $ PlutusTx.toData Use) <>
-                                  Constraints.mustSpendScriptOutput oref' (Redeemer $ PlutusTx.toData ())  <>
+                        tx      = Constraints.mustSpendScriptOutput oref  (Redeemer $ PlutusTx.toBuiltinData Use) <>
+                                  Constraints.mustSpendScriptOutput oref' (Redeemer $ PlutusTx.toBuiltinData ())  <>
                                   Constraints.mustPayToOtherScript
                                     (validatorHash $ oracleValidator oracle)
-                                    (Datum $ PlutusTx.toData x)
-                                    v                                                                      <>
+                                    (Datum $ PlutusTx.toBuiltinData x)
+                                    v                                                                             <>
                                   Constraints.mustPayToPubKey pkh' p
                     ledgerTx <- submitTxConstraintsWith @Swapping lookups tx
                     awaitTxConfirmed $ txId ledgerTx
@@ -193,8 +193,7 @@ useSwap oracle = do
     f amt x (_, o, _) = getPrice x o <= amt
 
 type SwapSchema =
-    BlockchainActions
-        .\/ Endpoint "offer"    Integer
+            Endpoint "offer"    Integer
         .\/ Endpoint "retrieve" ()
         .\/ Endpoint "use"      ()
         .\/ Endpoint "funds"    ()

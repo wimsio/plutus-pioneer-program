@@ -16,25 +16,25 @@ import           Control.Monad          hiding (fmap)
 import qualified Data.Map               as Map
 import           Data.Text              (Text)
 import           Data.Void              (Void)
-import           Plutus.Contract        as Contract hiding (when)
+import           Plutus.Contract        as Contract
 import           Plutus.Trace.Emulator  as Emulator
 import qualified PlutusTx
 import           PlutusTx.Prelude       hiding (Semigroup(..), unless)
-import           Ledger                 hiding (singleton)
+import           Ledger                 hiding (mint, singleton)
 import           Ledger.Constraints     as Constraints
 import qualified Ledger.Typed.Scripts   as Scripts
 import           Ledger.Value           as Value
 import           Playground.Contract    (printJson, printSchemas, ensureKnownCurrencies, stage, ToSchema)
 import           Playground.TH          (mkKnownCurrencies, mkSchemaDefinitions)
 import           Playground.Types       (KnownCurrency (..))
-import           Prelude                (Semigroup (..))
+import           Prelude                (IO, Semigroup (..), Show (..), String)
 import           Text.Printf            (printf)
 import           Wallet.Emulator.Wallet
 
 {-# INLINABLE mkPolicy #-}
-mkPolicy :: TxOutRef -> TokenName -> ScriptContext -> Bool
-mkPolicy oref tn ctx = traceIfFalse "UTxO not consumed"   hasUTxO           &&
-                       traceIfFalse "wrong amount minted" checkMintedAmount
+mkPolicy :: TxOutRef -> TokenName -> () -> ScriptContext -> Bool
+mkPolicy oref tn () ctx = traceIfFalse "UTxO not consumed"   hasUTxO           &&
+                          traceIfFalse "wrong amount minted" checkMintedAmount
   where
     info :: TxInfo
     info = scriptContextTxInfo ctx
@@ -47,9 +47,9 @@ mkPolicy oref tn ctx = traceIfFalse "UTxO not consumed"   hasUTxO           &&
         [(cs, tn', amt)] -> cs  == ownCurrencySymbol ctx && tn' == tn && amt == 1
         _                -> False
 
-policy :: TxOutRef -> TokenName -> Scripts.MonetaryPolicy
-policy oref tn = mkMonetaryPolicyScript $
-    $$(PlutusTx.compile [|| \oref' tn' -> Scripts.wrapMonetaryPolicy $ mkPolicy oref' tn' ||])
+policy :: TxOutRef -> TokenName -> Scripts.MintingPolicy
+policy oref tn = mkMintingPolicyScript $
+    $$(PlutusTx.compile [|| \oref' tn' -> Scripts.wrapMintingPolicy $ mkPolicy oref' tn' ||])
     `PlutusTx.applyCode`
     PlutusTx.liftCode oref
     `PlutusTx.applyCode`
@@ -58,9 +58,7 @@ policy oref tn = mkMonetaryPolicyScript $
 curSymbol :: TxOutRef -> TokenName -> CurrencySymbol
 curSymbol oref tn = scriptCurrencySymbol $ policy oref tn
 
-type NFTSchema =
-    BlockchainActions
-        .\/ Endpoint "mint" TokenName
+type NFTSchema = Endpoint "mint" TokenName
 
 mint :: TokenName -> Contract w NFTSchema Text ()
 mint tn = do
@@ -70,8 +68,8 @@ mint tn = do
         []       -> Contract.logError @String "no utxo found"
         oref : _ -> do
             let val     = Value.singleton (curSymbol oref tn) tn 1
-                lookups = Constraints.monetaryPolicy (policy oref tn) <> Constraints.unspentOutputs utxos
-                tx      = Constraints.mustForgeValue val <> Constraints.mustSpendPubKeyOutput oref
+                lookups = Constraints.mintingPolicy (policy oref tn) <> Constraints.unspentOutputs utxos
+                tx      = Constraints.mustMintValue val <> Constraints.mustSpendPubKeyOutput oref
             ledgerTx <- submitTxConstraintsWith @Void lookups tx
             void $ awaitTxConfirmed $ txId ledgerTx
             Contract.logInfo @String $ printf "forged %s" (show val)

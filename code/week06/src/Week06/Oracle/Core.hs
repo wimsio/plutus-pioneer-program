@@ -17,7 +17,7 @@ module Week06.Oracle.Core
     , oracleTokenName
     , oracleValue
     , oracleAsset
-    , oracleInst
+    , typedOracleValidator
     , oracleValidator
     , oracleAddress
     , OracleSchema
@@ -32,7 +32,7 @@ import qualified Data.Map                  as Map
 import           Data.Monoid               (Last (..))
 import           Data.Text                 (Text, pack)
 import           GHC.Generics              (Generic)
-import           Plutus.Contract           as Contract hiding (when)
+import           Plutus.Contract           as Contract
 import qualified PlutusTx
 import           PlutusTx.Prelude          hiding (Semigroup(..), unless)
 import           Ledger                    hiding (singleton)
@@ -41,8 +41,8 @@ import qualified Ledger.Typed.Scripts      as Scripts
 import           Ledger.Value              as Value
 import           Ledger.Ada                as Ada
 import           Plutus.Contracts.Currency as Currency
-import           Prelude                   (Semigroup (..))
-import qualified Prelude                   as Prelude
+import           Prelude                   (Semigroup (..), Show (..), String)
+import qualified Prelude
 
 data Oracle = Oracle
     { oSymbol   :: !CurrencySymbol
@@ -71,7 +71,7 @@ oracleValue :: TxOut -> (DatumHash -> Maybe Datum) -> Maybe Integer
 oracleValue o f = do
     dh      <- txOutDatum o
     Datum d <- f dh
-    PlutusTx.fromData d
+    PlutusTx.fromBuiltinData d
 
 {-# INLINABLE mkOracleValidator #-}
 mkOracleValidator :: Oracle -> Integer -> OracleRedeemer -> ScriptContext -> Bool
@@ -118,19 +118,19 @@ mkOracleValidator oracle x r ctx =
         outVal `geq` (inVal <> Ada.lovelaceValueOf (oFee oracle))
 
 data Oracling
-instance Scripts.ScriptType Oracling where
+instance Scripts.ValidatorTypes Oracling where
     type instance DatumType Oracling = Integer
     type instance RedeemerType Oracling = OracleRedeemer
 
-oracleInst :: Oracle -> Scripts.ScriptInstance Oracling
-oracleInst oracle = Scripts.validator @Oracling
+typedOracleValidator :: Oracle -> Scripts.TypedValidator Oracling
+typedOracleValidator oracle = Scripts.mkTypedValidator @Oracling
     ($$(PlutusTx.compile [|| mkOracleValidator ||]) `PlutusTx.applyCode` PlutusTx.liftCode oracle)
     $$(PlutusTx.compile [|| wrap ||])
   where
     wrap = Scripts.wrapValidator @Integer @OracleRedeemer
 
 oracleValidator :: Oracle -> Validator
-oracleValidator = Scripts.validatorScript . oracleInst
+oracleValidator = Scripts.validatorScript . typedOracleValidator
 
 oracleAddress :: Oracle -> Ledger.Address
 oracleAddress = scriptAddress . oracleValidator
@@ -141,10 +141,10 @@ data OracleParams = OracleParams
     , opToken  :: !TokenName
     } deriving (Show, Generic, FromJSON, ToJSON)
 
-startOracle :: forall w s. HasBlockchainActions s => OracleParams -> Contract w s Text Oracle
+startOracle :: forall w s. OracleParams -> Contract w s Text Oracle
 startOracle op = do
     pkh <- pubKeyHash <$> Contract.ownPubKey
-    osc <- mapError (pack . show) (forgeContract pkh [(oracleTokenName, 1)] :: Contract w s CurrencyError OneShotCurrency)
+    osc <- mapError (pack . show) (mintContract pkh [(oracleTokenName, 1)] :: Contract w s CurrencyError OneShotCurrency)
     let cs     = Currency.currencySymbol osc
         oracle = Oracle
             { oSymbol   = cs
@@ -155,25 +155,25 @@ startOracle op = do
     logInfo @String $ "started oracle " ++ show oracle
     return oracle
 
-updateOracle :: forall w s. HasBlockchainActions s => Oracle -> Integer -> Contract w s Text ()
+updateOracle :: forall w s. Oracle -> Integer -> Contract w s Text ()
 updateOracle oracle x = do
     m <- findOracle oracle
     let c = Constraints.mustPayToTheScript x $ assetClassValue (oracleAsset oracle) 1
     case m of
         Nothing -> do
-            ledgerTx <- submitTxConstraints (oracleInst oracle) c
+            ledgerTx <- submitTxConstraints (typedOracleValidator oracle) c
             awaitTxConfirmed $ txId ledgerTx
             logInfo @String $ "set initial oracle value to " ++ show x
         Just (oref, o,  _) -> do
             let lookups = Constraints.unspentOutputs (Map.singleton oref o)     <>
-                          Constraints.scriptInstanceLookups (oracleInst oracle) <>
+                          Constraints.typedValidatorLookups (typedOracleValidator oracle) <>
                           Constraints.otherScript (oracleValidator oracle)
-                tx      = c <> Constraints.mustSpendScriptOutput oref (Redeemer $ PlutusTx.toData Update)
+                tx      = c <> Constraints.mustSpendScriptOutput oref (Redeemer $ PlutusTx.toBuiltinData Update)
             ledgerTx <- submitTxConstraintsWith @Oracling lookups tx
             awaitTxConfirmed $ txId ledgerTx
             logInfo @String $ "updated oracle value to " ++ show x
 
-findOracle :: forall w s. HasBlockchainActions s => Oracle -> Contract w s Text (Maybe (TxOutRef, TxOutTx, Integer))
+findOracle :: forall w s. Oracle -> Contract w s Text (Maybe (TxOutRef, TxOutTx, Integer))
 findOracle oracle = do
     utxos <- Map.filter f <$> utxoAt (oracleAddress oracle)
     return $ case Map.toList utxos of
@@ -185,7 +185,7 @@ findOracle oracle = do
     f :: TxOutTx -> Bool
     f o = assetClassValueOf (txOutValue $ txOutTxOut o) (oracleAsset oracle) == 1
 
-type OracleSchema = BlockchainActions .\/ Endpoint "update" Integer
+type OracleSchema = Endpoint "update" Integer
 
 runOracle :: OracleParams -> Contract (Last Oracle) OracleSchema Text ()
 runOracle op = do

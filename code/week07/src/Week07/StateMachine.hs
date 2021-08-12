@@ -17,35 +17,38 @@ module Week07.StateMachine
     , FirstParams (..)
     , SecondParams (..)
     , GameSchema
+    , Last (..)
+    , ThreadToken
+    , Text
     , endpoints
     ) where
 
 import           Control.Monad                hiding (fmap)
 import           Data.Aeson                   (FromJSON, ToJSON)
+import           Data.Monoid                  (Last (..))
 import           Data.Text                    (Text, pack)
 import           GHC.Generics                 (Generic)
-import           Plutus.Contract              as Contract hiding (when)
-import           Plutus.Contract.StateMachine
-import qualified PlutusTx
-import           PlutusTx.Prelude             hiding (Semigroup(..), check, unless)
 import           Ledger                       hiding (singleton)
 import           Ledger.Ada                   as Ada
 import           Ledger.Constraints           as Constraints
 import           Ledger.Typed.Tx
 import qualified Ledger.Typed.Scripts         as Scripts
-import           Ledger.Value
+import           Plutus.Contract              as Contract
+import           Plutus.Contract.StateMachine
+import qualified PlutusTx
+import           PlutusTx.Prelude             hiding (Semigroup(..), check, unless)
 import           Playground.Contract          (ToSchema)
-import           Prelude                      (Semigroup (..))
+import           Prelude                      (Semigroup (..), Show (..), String)
 import qualified Prelude
 
 data Game = Game
     { gFirst          :: !PubKeyHash
     , gSecond         :: !PubKeyHash
     , gStake          :: !Integer
-    , gPlayDeadline   :: !Slot
-    , gRevealDeadline :: !Slot
-    , gToken          :: !AssetClass
-    } deriving (Show, Generic, FromJSON, ToJSON, Prelude.Eq, Prelude.Ord)
+    , gPlayDeadline   :: !POSIXTime
+    , gRevealDeadline :: !POSIXTime
+    , gToken          :: !ThreadToken
+    } deriving (Show, Generic, FromJSON, ToJSON, Prelude.Eq)
 
 PlutusTx.makeLift ''Game
 
@@ -85,7 +88,7 @@ gameDatum :: TxOut -> (DatumHash -> Maybe Datum) -> Maybe GameDatum
 gameDatum o f = do
     dh      <- txOutDatum o
     Datum d <- f dh
-    PlutusTx.fromData d
+    PlutusTx.fromBuiltinData d
 
 {-# INLINABLE transition #-}
 transition :: Game -> State GameDatum -> GameRedeemer -> Maybe (TxConstraints Void Void, State GameDatum)
@@ -97,26 +100,20 @@ transition game s r = case (stateValue s, stateData s, r) of
                                                      )
     (v, GameDatum _ (Just _), Reveal _)
         | lovelaces v == (2 * gStake game)   -> Just ( Constraints.mustBeSignedBy (gFirst game)                     <>
-                                                       Constraints.mustValidateIn (to $ gRevealDeadline game)       <>
-                                                       Constraints.mustPayToPubKey (gFirst game) token
+                                                       Constraints.mustValidateIn (to $ gRevealDeadline game)
                                                      , State Finished mempty
                                                      )
     (v, GameDatum _ Nothing, ClaimFirst)
         | lovelaces v == gStake game         -> Just ( Constraints.mustBeSignedBy (gFirst game)                     <>
-                                                       Constraints.mustValidateIn (from $ 1 + gPlayDeadline game)   <>
-                                                       Constraints.mustPayToPubKey (gFirst game) token
+                                                       Constraints.mustValidateIn (from $ 1 + gPlayDeadline game)
                                                      , State Finished mempty
                                                      )
     (v, GameDatum _ (Just _), ClaimSecond)
         | lovelaces v == (2 * gStake game)   -> Just ( Constraints.mustBeSignedBy (gSecond game)                    <>
-                                                       Constraints.mustValidateIn (from $ 1 + gRevealDeadline game) <>
-                                                       Constraints.mustPayToPubKey (gFirst game) token
+                                                       Constraints.mustValidateIn (from $ 1 + gRevealDeadline game)
                                                      , State Finished mempty
                                                      )
     _                                        -> Nothing
-  where
-    token :: Value
-    token = assetClassValue (gToken game) 1
 
 {-# INLINABLE final #-}
 final :: GameDatum -> Bool
@@ -151,8 +148,8 @@ bsOne  = "1"
 gameStateMachine' :: Game -> StateMachine GameDatum GameRedeemer
 gameStateMachine' game = gameStateMachine game bsZero bsOne
 
-gameInst :: Game -> Scripts.ScriptInstance Gaming
-gameInst game = Scripts.validator @Gaming
+typedGameValidator :: Game -> Scripts.TypedValidator Gaming
+typedGameValidator game = Scripts.mkTypedValidator @Gaming
     ($$(PlutusTx.compile [|| mkGameValidator ||])
         `PlutusTx.applyCode` PlutusTx.liftCode game
         `PlutusTx.applyCode` PlutusTx.liftCode bsZero
@@ -162,38 +159,40 @@ gameInst game = Scripts.validator @Gaming
     wrap = Scripts.wrapValidator @GameDatum @GameRedeemer
 
 gameValidator :: Game -> Validator
-gameValidator = Scripts.validatorScript . gameInst
+gameValidator = Scripts.validatorScript . typedGameValidator
 
 gameAddress :: Game -> Ledger.Address
 gameAddress = scriptAddress . gameValidator
 
 gameClient :: Game -> StateMachineClient GameDatum GameRedeemer
-gameClient game = mkStateMachineClient $ StateMachineInstance (gameStateMachine' game) (gameInst game)
+gameClient game = mkStateMachineClient $ StateMachineInstance (gameStateMachine' game) (typedGameValidator game)
 
 data FirstParams = FirstParams
     { fpSecond         :: !PubKeyHash
     , fpStake          :: !Integer
-    , fpPlayDeadline   :: !Slot
-    , fpRevealDeadline :: !Slot
+    , fpPlayDeadline   :: !POSIXTime
+    , fpRevealDeadline :: !POSIXTime
     , fpNonce          :: !ByteString
-    , fpCurrency       :: !CurrencySymbol
-    , fpTokenName      :: !TokenName
     , fpChoice         :: !GameChoice
     } deriving (Show, Generic, FromJSON, ToJSON, ToSchema)
 
 mapError' :: Contract w s SMContractError a -> Contract w s Text a
 mapError' = mapError $ pack . show
 
-firstGame :: forall w s. HasBlockchainActions s => FirstParams -> Contract w s Text ()
+waitUntilTimeHasPassed :: AsContractError e => POSIXTime -> Contract w s e ()
+waitUntilTimeHasPassed t = void $ awaitTime t >> waitNSlots 1
+
+firstGame :: forall s. FirstParams -> Contract (Last ThreadToken) s Text ()
 firstGame fp = do
     pkh <- pubKeyHash <$> Contract.ownPubKey
+    tt  <- mapError' getThreadToken
     let game   = Game
             { gFirst          = pkh
             , gSecond         = fpSecond fp
             , gStake          = fpStake fp
             , gPlayDeadline   = fpPlayDeadline fp
             , gRevealDeadline = fpRevealDeadline fp
-            , gToken          = AssetClass (fpCurrency fp, fpTokenName fp)
+            , gToken          = tt
             }
         client = gameClient game
         v      = lovelaceValueOf (fpStake fp)
@@ -201,8 +200,9 @@ firstGame fp = do
         bs     = sha2_256 $ fpNonce fp `concatenate` if c == Zero then bsZero else bsOne
     void $ mapError' $ runInitialise client (GameDatum bs Nothing) v
     logInfo @String $ "made first move: " ++ show (fpChoice fp)
+    tell $ Last $ Just tt
 
-    void $ awaitSlot $ 1 + fpPlayDeadline fp
+    waitUntilTimeHasPassed $ fpPlayDeadline fp
 
     m <- mapError' $ getOnChainState client
     case m of
@@ -224,14 +224,13 @@ firstGame fp = do
 data SecondParams = SecondParams
     { spFirst          :: !PubKeyHash
     , spStake          :: !Integer
-    , spPlayDeadline   :: !Slot
-    , spRevealDeadline :: !Slot
-    , spCurrency       :: !CurrencySymbol
-    , spTokenName      :: !TokenName
+    , spPlayDeadline   :: !POSIXTime
+    , spRevealDeadline :: !POSIXTime
     , spChoice         :: !GameChoice
-    } deriving (Show, Generic, FromJSON, ToJSON, ToSchema)
+    , spToken          :: !ThreadToken
+    } deriving (Show, Generic, FromJSON, ToJSON)
 
-secondGame :: forall w s. HasBlockchainActions s => SecondParams -> Contract w s Text ()
+secondGame :: forall w s. SecondParams -> Contract w s Text ()
 secondGame sp = do
     pkh <- pubKeyHash <$> Contract.ownPubKey
     let game   = Game
@@ -240,7 +239,7 @@ secondGame sp = do
             , gStake          = spStake sp
             , gPlayDeadline   = spPlayDeadline sp
             , gRevealDeadline = spRevealDeadline sp
-            , gToken          = AssetClass (spCurrency sp, spTokenName sp)
+            , gToken          = spToken sp
             }
         client = gameClient game
     m <- mapError' $ getOnChainState client
@@ -252,7 +251,7 @@ secondGame sp = do
                 void $ mapError' $ runStep client $ Play $ spChoice sp
                 logInfo @String $ "made second move: " ++ show (spChoice sp)
 
-                void $ awaitSlot $ 1 + spRevealDeadline sp
+                waitUntilTimeHasPassed $ spRevealDeadline sp
 
                 m' <- mapError' $ getOnChainState client
                 case m' of
@@ -264,9 +263,9 @@ secondGame sp = do
 
             _ -> throwError "unexpected datum"
 
-type GameSchema = BlockchainActions .\/ Endpoint "first" FirstParams .\/ Endpoint "second" SecondParams
+type GameSchema = Endpoint "first" FirstParams .\/ Endpoint "second" SecondParams
 
-endpoints :: Contract () GameSchema Text ()
+endpoints :: Contract (Last ThreadToken) GameSchema Text ()
 endpoints = (first `select` second) >> endpoints
   where
     first  = endpoint @"first"  >>= firstGame

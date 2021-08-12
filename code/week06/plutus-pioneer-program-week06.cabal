@@ -38,6 +38,7 @@ executable oracle-pab
   ghc-options:         -Wall -threaded
   build-depends:       aeson
                      , base ^>= 4.14.1.0
+                     , data-default
                      , freer-extras
                      , freer-simple
                      , plutus-contract

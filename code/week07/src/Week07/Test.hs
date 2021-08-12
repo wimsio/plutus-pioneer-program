@@ -19,10 +19,12 @@ import           Control.Monad.Freer.Extras as Extras
 import           Data.Default               (Default (..))
 import qualified Data.Map                   as Map
 import           Ledger
+import           Ledger.TimeSlot
 import           Ledger.Value
 import           Ledger.Ada                 as Ada
 import           Plutus.Trace.Emulator      as Emulator
 import           PlutusTx.Prelude
+import           Prelude                    (IO, Show (..))
 import           Wallet.Emulator.Wallet
 
 import           Week07.EvenOdd
@@ -35,7 +37,7 @@ test = do
     test' One One
 
 test' :: GameChoice -> GameChoice -> IO ()
-test' c1 c2 = runEmulatorTraceIO' def emCfg $ myTrace c1 c2
+test' c1 c2 = runEmulatorTraceIO' def emCfg def $ myTrace c1 c2
   where
     emCfg :: EmulatorConfig
     emCfg = EmulatorConfig $ Left $ Map.fromList
@@ -44,7 +46,7 @@ test' c1 c2 = runEmulatorTraceIO' def emCfg $ myTrace c1 c2
         ]
 
     v :: Value
-    v = Ada.lovelaceValueOf 1000_000_000
+    v = Ada.lovelaceValueOf 1_000_000_000
 
 gameTokenCurrency :: CurrencySymbol
 gameTokenCurrency = "ff"
@@ -59,14 +61,17 @@ myTrace c1 c2 = do
     h1 <- activateContractWallet (Wallet 1) endpoints
     h2 <- activateContractWallet (Wallet 2) endpoints
 
-    let pkh1 = pubKeyHash $ walletPubKey $ Wallet 1
-        pkh2 = pubKeyHash $ walletPubKey $ Wallet 2
+    let pkh1      = pubKeyHash $ walletPubKey $ Wallet 1
+        pkh2      = pubKeyHash $ walletPubKey $ Wallet 2
+        stake     = 5_000_000
+        deadline1 = slotToBeginPOSIXTime def 5
+        deadline2 = slotToBeginPOSIXTime def 10
 
         fp = FirstParams
                 { fpSecond         = pkh2
-                , fpStake          = 5000000
-                , fpPlayDeadline   = 5
-                , fpRevealDeadline = 10
+                , fpStake          = stake
+                , fpPlayDeadline   = deadline1
+                , fpRevealDeadline = deadline2
                 , fpNonce          = "SECRETNONCE"
                 , fpCurrency       = gameTokenCurrency
                 , fpTokenName      = gameTokenName
@@ -74,9 +79,9 @@ myTrace c1 c2 = do
                 }
         sp = SecondParams
                 { spFirst          = pkh1
-                , spStake          = 5000000
-                , spPlayDeadline   = 5
-                , spRevealDeadline = 10
+                , spStake          = stake
+                , spPlayDeadline   = deadline1
+                , spRevealDeadline = deadline2
                 , spCurrency       = gameTokenCurrency
                 , spTokenName      = gameTokenName
                 , spChoice         = c2

@@ -23,10 +23,10 @@ import           Data.Text                  (Text)
 import           Ledger
 import           Ledger.Value               as Value
 import           Ledger.Ada                 as Ada
-import           Plutus.Contract            as Contract hiding (when)
+import           Plutus.Contract            as Contract
 import           Plutus.Trace.Emulator      as Emulator
 import           PlutusTx.Prelude           hiding (Semigroup(..), unless)
-import           Prelude                    (Semigroup(..))
+import           Prelude                    (IO, Semigroup(..), Show (..))
 import           Wallet.Emulator.Wallet
 
 import           Week06.Oracle.Core
@@ -40,7 +40,7 @@ assetToken :: TokenName
 assetToken = "USDT"
 
 test :: IO ()
-test = runEmulatorTraceIO' def emCfg myTrace
+test = runEmulatorTraceIO' def emCfg def myTrace
   where
     emCfg :: EmulatorConfig
     emCfg = EmulatorConfig $ Left $ Map.fromList [(Wallet i, v) | i <- [1 .. 10]]
@@ -49,7 +49,7 @@ test = runEmulatorTraceIO' def emCfg myTrace
     v = Ada.lovelaceValueOf                    100_000_000 <>
         Value.singleton assetSymbol assetToken 100_000_000
 
-checkOracle :: Oracle -> Contract () BlockchainActions Text a
+checkOracle :: Oracle -> Contract () Empty Text a
 checkOracle oracle = do
     m <- findOracle oracle
     case m of

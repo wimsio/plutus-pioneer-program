@@ -20,14 +20,15 @@ import           Control.Monad.Freer.Error           (Error)
 import           Control.Monad.Freer.Extras.Log      (LogMsg)
 import           Control.Monad.IO.Class              (MonadIO (..))
 import           Data.Aeson                          (FromJSON, Result (..), fromJSON)
+import           Data.Default                        (Default (..))
 import           Data.Monoid                         (Last (..))
 import           Data.Text                           (Text, pack)
 import           Ledger
 import           Ledger.Constraints
 import qualified Ledger.Value                        as Value
-import           Plutus.Contract                     hiding (when)
+import           Plutus.Contract
 import           Plutus.PAB.Effects.Contract         (ContractEffect (..))
-import           Plutus.PAB.Effects.Contract.Builtin (Builtin, SomeBuiltin (..), type (.\\), endpointsToSchemas, handleBuiltin)
+import           Plutus.PAB.Effects.Contract.Builtin (Builtin, SomeBuiltin (..), endpointsToSchemas, handleBuiltin)
 import           Plutus.PAB.Monitoring.PABLogMsg     (PABMultiAgentMsg)
 import           Plutus.PAB.Simulator                (SimulatorEffectHandlers)
 import qualified Plutus.PAB.Simulator                as Simulator
@@ -91,8 +92,8 @@ handleOracleContracts ::
 handleOracleContracts = handleBuiltin getSchema getContract where
     getSchema = \case
         Init     -> endpointsToSchemas @Empty
-        Oracle _ -> endpointsToSchemas @(Oracle.OracleSchema .\\ BlockchainActions)
-        Swap _   -> endpointsToSchemas @(Oracle.SwapSchema   .\\ BlockchainActions)
+        Oracle _ -> endpointsToSchemas @Oracle.OracleSchema
+        Swap _   -> endpointsToSchemas @Oracle.SwapSchema
     getContract = \case
         Init        -> SomeBuiltin   initContract
         Oracle cs   -> SomeBuiltin $ Oracle.runOracle $ oracleParams cs
@@ -100,16 +101,16 @@ handleOracleContracts = handleBuiltin getSchema getContract where
 
 handlers :: SimulatorEffectHandlers (Builtin OracleContracts)
 handlers =
-    Simulator.mkSimulatorHandlers @(Builtin OracleContracts) []
+    Simulator.mkSimulatorHandlers @(Builtin OracleContracts) def []
     $ interpret handleOracleContracts
 
-initContract :: Contract (Last CurrencySymbol) BlockchainActions Text ()
+initContract :: Contract (Last CurrencySymbol) Empty Text ()
 initContract = do
     ownPK <- pubKeyHash <$> ownPubKey
     cur   <-
         mapError (pack . show)
-        (Currency.forgeContract ownPK [(usdt, fromIntegral (length wallets) * amount)]
-        :: Contract (Last CurrencySymbol) BlockchainActions Currency.CurrencyError Currency.OneShotCurrency)
+        (Currency.mintContract ownPK [(usdt, fromIntegral (length wallets) * amount)]
+        :: Contract (Last CurrencySymbol) Empty Currency.CurrencyError Currency.OneShotCurrency)
     let cs = Currency.currencySymbol cur
         v  = Value.singleton cs usdt amount
     forM_ wallets $ \w -> do
