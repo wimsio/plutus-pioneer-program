@@ -66,7 +66,7 @@
   - Using `curl` to interact with the PAB.
 
 ## Code Examples
-
+ 
 - Lecture #1:  [English Auction](code/week01)
 - Lecture #2:  [Simple Validation](code/week02)
 - Lecture #3:  [Validation Context & Parameterized Contracts](code/week03)
@@ -203,3 +203,7 @@
 - [The Plutus repository](https://github.com/input-output-hk/plutus)
 - [Learn You a Haskell for Great Good!](http://learnyouahaskell.com/)
 - [Haskell & Cryptocurrencies course Mongolia](https://www.youtube.com/playlist?list=PLJ3w5xyG4JWmBVIigNBytJhvSSfZZzfTm)
+
+## Video Links
+
+-[Plutus Pioneer Program   Lecture #4] (https://www.youtube.com/watch?v=_U9sDP6ODs4)
