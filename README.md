@@ -206,9 +206,9 @@
 
 ## Video Links
 
--[Plutus Pioneer Program   Lecture #4] (https://www.youtube.com/watch?v=_U9sDP6ODs4)
--[Plutus Pioneer Program   Lecture #5] (https://www.youtube.com/watch?v=CTAPJ-HCzSs)
--[Plutus Pioneer Program   Lecture 2 (Phụ đề)] (https://www.youtube.com/watch?v=7nDGZkUIeUQ)
+- [`Plutus Pioneer Program   Lecture #4`] (https://www.youtube.com/watch?v=_U9sDP6ODs4).
+- [`Plutus Pioneer Program   Lecture #5`] (https://www.youtube.com/watch?v=CTAPJ-HCzSs).
+- [Plutus Pioneer Program   Lecture 2 (Phụ đề)] (https://www.youtube.com/watch?v=7nDGZkUIeUQ)
 -[Plutus Pioneer Program   Lecture 7 (Phụ đề)] (https://www.youtube.com/watch?v=ptsltoZNl50)
 -[Plutus Pioneer Program   Lecture 9 (Phụ đề)] (https://www.youtube.com/watch?v=J5as459k10E)
 -[Plutus Pioneer Program  Lecture  8 (Phụ đề)] (https://www.youtube.com/watch?v=tGjEvumVBk8)
@@ -279,4 +279,7 @@
 -[Plutuswap joins ecosystem of #Cardano #blockchain] (https://www.youtube.com/watch?v=kavP7MSknrk)
 -[Project Plutus #1: Setting up the repo basic design] (https://www.youtube.com/watch?v=fobdtOdn5lY)
 -[Project Plutus #2: Git setup + the basics] (https://www.youtube.com/watch?v=qTS28R2udsI)
+
+
+
 
