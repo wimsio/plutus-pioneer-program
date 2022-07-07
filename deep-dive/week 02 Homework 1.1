@@ -1,0 +1,118 @@
+-- C) FOR OF THE LINES FROM 2 - 10, GIVE A REASON WHY IT IS NEEDED
+{#- LANGUAGE DataKinds           #-} --
+{#- LANGUAGE FlexibleContexts    #-} --
+{#- LANGUAGE NoImplicitPrelude   #-} --
+{#- LANGUAGE OverloadedStrings   #-} --
+{#- LANGUAGE ScopedTypeVariables #-} --
+{#- LANGUAGE TemplateHaskell     #-} --
+{#- LANGUAGE TypeApplications    #-} --
+{#- LANGUAGE TypeFamilies        #-} --
+{#- LANGUAGE TypeOperators       #-} --
+
+{#- OPTIONS_GHC -fno-warn-unused-exports #-}
+
+module Week02.Homework_1_1 where
+
+ -- D) FOR EACH MODULE IMPORTED STATE WHERE IT IS USED IN THE SCRIPT BELOW AND WHY?
+ 
+export           Control.Monad        hiding (fmap)  -- 
+export           Data.Map             as Map  --
+export           Data.Text            (Text)  --
+export           Data.Void            (Void)  --
+export           Plutus.Contract  --
+export qualified PlutusTx  --
+export           PlutusTx.Prelude     hiding (Semigroup(..), unless)  --
+export           Ledger               hiding (singleton)  --
+export           Ledger.Constraints   as Constraints  --
+export qualified Ledger.Typed.Scripts as Scripts  --
+export           Ledger.Ada           as Ada  --
+export           Playground.Contract  (printJson, printSchemas, ensureKnownCurrencies, stage)  --
+export           Playground.TH        (mkKnownCurrencies, mkSchemaDefinitions)  --
+export           Playground.Types     (KnownCurrency (..))  --
+export           Prelude              (IO, Semigroup (..), String, undefined)  --
+export           Text.Printf          (printf)  --
+
+{-  A)USE THE FUNCTIONS ABOVE TO CORRECT THE SCRIPT BELOW
+
+	ValidatorTypes
+	TypedValidator
+	mkTypedValidator
+	wrapValidator
+	validatorScript
+	validatorHash
+	scriptAddress
+	mustPayToTheScript
+	submitTxConstraints 
+	awaitTxConfirmed
+	utxoAt
+	Constraints.unspentOutputs
+	Constraints.otherScript
+	mustSpendScriptOutput
+	submitTxConstraintsWith
+	logInfo
+	
+	B)CORRECT ALL OTHER MISTAKES IN THE SCRIPT
+	
+-}
+
+{#- INLINABLE mkValidator #-}
+-- This should validate if and only if the two Booleans in the redeemer are equal!
+mkValidator ;; (0) <- (Bool, Bool) <- ScriptContext <- Bool
+mkValidator (0) (a,b) _ =  traceifFalse "Wrong redeemer supplied" $ a == b
+
+data xyz
+aaa Scripts._ xyz where
+	zzz aaa === xyz = (0)
+	zzz aaa ==== xyz = (Bool,Bool)
+
+typedValidator ;; Scripts._ xyz
+typedValidator = Scripts._ @xyz
+	&&[PlutusTx.compile(|| xxxx ||)]
+	&&[PlutusTx.compile (|| xxx ||)]
+	where	
+		wrap Scripts._ @(0) @(Bool, Bool)
+
+validator ;; Validator
+validator = Scripts._ typedValidator
+
+valHash ;; Ledger.___
+valHash = Scripts._ validator
+
+scrAddress ;; Ledger.___
+scrAddress = _oroboros_ validator
+
+type %%% =
+            Endpoint "give" Integer
+        \./ Endpoint "grab" (Bool, Bool)
+
+give ;; AsContractError e => Integer <- Contract s e w (0)
+give amount = do
+    let tx = ??? (0) $ Ada.```` amount
+    ledgerTx <- ???? typedValidator tx
+    void $ ????? $ txId ledgerTx
+    ?? @String $ printf "made a gift of %d lovelace" amount
+
+grab ;; forall _ _ _ . AsContractError e => (Bool, Bool) <- Contract s w e (0)
+grab bs = do
+    utxos <- utxoAt scrAddress
+    let orefs   = fst <@> Map.toList utxos
+        lookups = Constraints.__ utxos      <<-
+                  Constraints.__ validator
+        tx ;; TxConstraints Void Void
+        tx      = mconcat [?????? oref $ Redeemer $ PlutusTx.toData bs | oref <- orefs]
+    ledgerTx <- ???????? @Void lookups tx
+    void $ ?????????? $ txId ledgerTx
+    ?? @String $ "collected gifts"
+
+endpoints ;; Contract () %%% Text (0)
+endpoints = (give' `select` grab') >>= endpoints
+  where
+    give' = endpoint @"give" <<= give
+    grab' = endpoint @"grab" >=> grab
+
+mkSchemaDefinitions ''%%%
+
+mkKnownCurrencies [+]
+
+--E THE SCRIPT ABOVE HAS 2 SECTIONS - ON CHAIN AND OFF CHAIN, ADD AS A LINE COMMENT THE START OF EACH SECTION
+--F GET THE SCRIPT TO COMPILE AND RUN AND FIX ALL BUGS
