@@ -204,6 +204,31 @@
 - [Learn You a Haskell for Great Good!](http://learnyouahaskell.com/)
 - [Haskell & Cryptocurrencies course Mongolia](https://www.youtube.com/playlist?list=PLJ3w5xyG4JWmBVIigNBytJhvSSfZZzfTm)
 
+## Gimbalands Project Based Learning Plutus
+
+000.
+- [Securing Wallet, getting ADA and Staking on Cardano ](https://gimbalabs.com/pbl/csk/csk000)
+001.
+- [Getting Started with GitHub and the Marlowe Playground](https://gimbalabs.com/pbl/csk/csk001)
+002.
+- [Talking About Cardano](https://gimbalabs.com/pbl/csk/csk003)
+003.
+- [ Where does blockchain fit in the development stack?](https://gimbalabs.com/pbl/csk/csk004)
+004.
+- [A mini-csk on Transaction Metadata ](https://gimbalabs.com/pbl/csk/csk005)
+005.
+- [The Gimbalabs Local ADA Spending Challenge](https://gimbalabs.com/pbl/csk/csk006)
+006.
+- [What can I do with Transaction Metadata on Cardano](https://gimbalabs.com/pbl/csk/csk007)
+007.
+- [Building Transactions on cardano-cli](https://gimbalabs.com/pbl/csk/csk008)
+008.
+- [Metadata, Minting, and Messing with Unsigs](https://gimbalabs.com/pbl/csk/csk009)
+009.
+- [The Lobster Challenge](https://gimbalabs.com/pbl/csk/csk010)
+010.
+- [What can I do with GameChanger Wallet? (Part 1) ](https://gimbalabs.com/pbl/csk/csk011)
+
 ## Video Links
 
 - [Plutus Pioneer Program   Lecture #4](https://www.youtube.com/watch?v=_U9sDP6ODs4)
